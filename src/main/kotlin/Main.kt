@@ -42,7 +42,10 @@ fun main(args: Array<String>) {
 
     parser.parse(args)
 
-    val localeFiles = File(".").listFiles { file -> file.extension == "json" }
+    val localeFiles = File(".")
+        .listFiles { file ->
+            supportedLocales.contains(file.nameWithoutExtension) && file.extension == "json"
+        }
     println("Checking Directory ${File(".").absolutePath}")
 
     if (localeFiles.isNullOrEmpty()) {
@@ -108,8 +111,9 @@ fun printJsObjects(locales: Map<String, JsonObject>, maxKeyLength: Int) {
 
 fun sanitizeKey(key: String, maxKeyLength: Int): String {
     val result = StringBuilder()
+    val trimmedKey = key.trimStart { it.isLetter().not() }
 
-    for (char in key) {
+    for (char in trimmedKey) {
         if (char.isLetterOrDigit()) {
             result.append(char.lowercaseChar())
         } else if (char == ' ') {
@@ -218,6 +222,16 @@ fun formatTranslations(locale: String, commonKeys: Set<String>, translations: Js
         }
     )
 }
+
+val supportedLocales = listOf(
+    "en",
+    "hi",
+    "kn",
+    "ta",
+    "te",
+    "mr",
+    "bn"
+)
 
 val localeFullNames = mapOf(
     "en" to "English",
