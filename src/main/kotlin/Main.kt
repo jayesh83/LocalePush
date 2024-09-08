@@ -83,12 +83,17 @@ fun listCommonKeys(locales: Map<String, JsonObject>, maxKeyLength: Int) {
 
 fun listUniqueKeys(locales: Map<String, JsonObject>, maxKeyLength: Int) {
     println("\nUnique keys in each locale:")
+    var anyUniqueKeysFound = false
     locales.forEach { (locale, json) ->
         val uniqueKeys = json.keys - locales.filter { it.key != locale }.flatMap { it.value.keys }.toSet()
         if (uniqueKeys.isNotEmpty()) {
             println(" ${getLocaleFullName(locale)} | ${uniqueKeys.size} :")
             uniqueKeys.forEach { key -> println("  ${sanitizeKey(key, maxKeyLength)}") }
+            anyUniqueKeysFound = true
         }
+    }
+    if (anyUniqueKeysFound.not()) {
+        println("No unique keys found in any locale files!")
     }
 }
 
@@ -140,7 +145,7 @@ fun processValue(value: String): String {
         }
 
         // Replace $X placeholders
-        processed = processed.replace(Regex("\\$([a-zA-Z])"), "{0}")
+        processed = processed.replace(Regex("%([a-zA-Z])"), "{0}")
 
         return processed
     }
@@ -150,7 +155,7 @@ fun processValue(value: String): String {
 }
 
 fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
-    println("Enter the path to your project's locales folder:")
+    println("\nEnter the path to your project's locales folder:")
     val localesPath = readlnOrNull() ?: return
     val localesDir = File(localesPath)
 
@@ -158,7 +163,16 @@ fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
         println("Invalid directory path. Please ensure the directory exists.")
         return
     }
+
     val commonTranslations = locales.values.map { it.keys }.reduce { acc, keys -> acc.intersect(keys) }
+    if (commonTranslations.isEmpty()) {
+        println("No common translations found. Skipping update!")
+        return
+    }
+
+    println("\nEnter the object name:")
+    val objectName = readlnOrNull() ?: "object"
+
     locales.forEach { (locale, translations) ->
         val localeFile = File(localesDir, "$locale.js")
         if (!localeFile.exists()) {
@@ -167,24 +181,37 @@ fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
         }
 
         val content = localeFile.readText()
-        val updatedContent = updateLocaleFile(content, locale, commonTranslations, translations, maxKeyLength)
+        val updatedContent = updateLocaleFile(content, commonTranslations, translations, maxKeyLength, objectName)
         localeFile.writeText(updatedContent)
         println("✅Updated $locale.js")
     }
+
+    // Update constants.js file
+    val constantsFile = File(localesDir, "constants.js")
+    if (!constantsFile.exists()) {
+        println("Warning: constants.js does not exist in the specified directory. Creating a new file.")
+        constantsFile.createNewFile()
+    }
+
+    val constantsContent = constantsFile.readText()
+    val updatedConstantsContent = updateConstantsFile(constantsContent, commonTranslations, maxKeyLength, objectName)
+    constantsFile.writeText(updatedConstantsContent)
+    println("✅Updated constants.js")
+
     println("${commonTranslations.size} common strings pushed successfully!")
 }
 
 fun updateLocaleFile(
     content: String,
-    locale: String,
     commonKeys: Set<String>,
     translations: JsonObject,
-    maxKeyLength: Int
+    maxKeyLength: Int,
+    objectName: String
 ): String {
     val lastBrace = content.lastIndexOf('}')
     if (lastBrace == -1) {
         // If no closing brace found, append the translations at the end
-        return "$content\n\n${formatTranslations(locale, commonKeys, translations, maxKeyLength)}\n"
+        return "$content\n\n${formatTranslations(commonKeys, translations, maxKeyLength, objectName)}\n"
     }
 
     // Check if there's a nested object closure
@@ -192,7 +219,7 @@ fun updateLocaleFile(
     return if (nestedClosureIndex != -1 && nestedClosureIndex > lastBrace - 5) {
         // Insert before the nested closure
         content.substring(0, nestedClosureIndex) +
-                formatTranslations(locale, commonKeys, translations, maxKeyLength) + ",\n" +
+                formatTranslations(commonKeys, translations, maxKeyLength, objectName) + ",\n" +
                 content.substring(nestedClosureIndex)
     } else {
         // Insert before the last closing brace
@@ -202,25 +229,66 @@ fun updateLocaleFile(
                 subStringBeforeLastClosingBrace = replaceRange(lastIndex, lastIndex, ",")
         }
         subStringBeforeLastClosingBrace +
-                formatTranslations(locale, commonKeys, translations, maxKeyLength) + ",\n" +
+                formatTranslations(commonKeys, translations, maxKeyLength, objectName) + ",\n" +
                 content.substring(lastBrace)
     }
 }
 
-fun formatTranslations(locale: String, commonKeys: Set<String>, translations: JsonObject, maxKeyLength: Int): String {
+fun formatTranslations(
+    commonKeys: Set<String>,
+    translations: JsonObject,
+    maxKeyLength: Int,
+    objectName: String
+): String {
     val commonTranslations = translations.filter { commonKeys.contains(it.key) }
     return commonTranslations.entries.joinToString(
         separator = ",\n",
-        prefix = "    $locale: {\n",
+        prefix = "    $objectName: {\n",
         postfix = "\n    }",
         transform = { (key, value) ->
             val sanitizedKey = sanitizeKey(key, maxKeyLength)
             val content = value.jsonPrimitive.content
             val processedContent = processValue(content)
+            val quotedContent = if (isComplexString(processedContent)) {
+                "`$processedContent`"
+            } else {
+                "\"$processedContent\""
+            }
 
-            "        $sanitizedKey: \"$processedContent\""
+            "        $sanitizedKey: $quotedContent"
         }
     )
+}
+
+fun isComplexString(s: String): Boolean {
+    val complexPattern = Regex("[\n'\\\\<]|\\\\u")
+    return complexPattern.containsMatchIn(s)
+}
+
+fun updateConstantsFile(
+    content: String,
+    commonTranslations: Set<String>,
+    maxKeyLength: Int,
+    objectName: String
+): String {
+    val lastBrace = content.lastIndexOf('}')
+    val newMappings = commonTranslations.joinToString(",\n") { key ->
+        val sanitizedKey = sanitizeKey(key, maxKeyLength)
+        "    ${sanitizedKey.uppercase()}: \"$objectName.$sanitizedKey\""
+    }
+
+    return if (lastBrace == -1) {
+        // If no closing brace found, create a new object
+        "{\n$newMappings\n}"
+    } else {
+        // Insert before the last closing brace
+        var subStringBeforeLastClosingBrace = content.substring(0, lastBrace)
+        with(subStringBeforeLastClosingBrace) {
+            if (!endsWith(",\n"))
+                subStringBeforeLastClosingBrace = replaceRange(lastIndex, lastIndex, ",")
+        }
+        subStringBeforeLastClosingBrace + "\n$newMappings\n" + content.substring(lastBrace)
+    }
 }
 
 val supportedLocales = listOf(
