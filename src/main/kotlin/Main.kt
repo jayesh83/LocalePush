@@ -1,6 +1,9 @@
 import kotlinx.cli.*
 import kotlinx.serialization.json.*
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.util.*
 
 fun main(args: Array<String>) {
     val parser = ArgParser("localiser")
@@ -52,9 +55,15 @@ fun main(args: Array<String>) {
         println("No locale files found in the current directory.")
         return
     }
-
     val locales = localeFiles.associate { file ->
-        file.nameWithoutExtension to Json.parseToJsonElement(file.readText()).jsonObject
+        var jsonFileContent = file.readText()
+        // Regex to find all single backslashes followed by specific escape sequences like \u2028 or \n
+        val singleBackslashRegex = Regex("""(\\[uU][0-9a-fA-F]{4}|\\n)""")
+        // Replace each single backslash with a double backslash
+        jsonFileContent = singleBackslashRegex.replace(jsonFileContent) { matchResult ->
+            "\\" + matchResult.value
+        }
+        file.nameWithoutExtension to Json.parseToJsonElement(jsonFileContent).jsonObject
     }
 
     if (listCommonKeys) {
@@ -155,13 +164,20 @@ fun processValue(value: String): String {
 }
 
 fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
-    println("\nEnter the path to your project's locales folder:")
-    val localesPath = readlnOrNull() ?: return
-    val localesDir = File(localesPath)
+    var projectPath = getProjectPath()
 
-    if (!localesDir.exists() || !localesDir.isDirectory) {
-        println("Invalid directory path. Please ensure the directory exists.")
-        return
+    if (projectPath == null) {
+        println("Enter the path to your project's locales directory:")
+        val newProjectPath = readlnOrNull() ?: ""
+        val localesDir = File(newProjectPath)
+
+        if (!localesDir.exists() || !localesDir.isDirectory) {
+            println("Invalid directory path. Please ensure the directory exists.")
+            return
+        }
+
+        projectPath = newProjectPath
+        saveConfig(key = "projectPath", value = newProjectPath)
     }
 
     val commonTranslations = locales.values.map { it.keys }.reduce { acc, keys -> acc.intersect(keys) }
@@ -170,11 +186,11 @@ fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
         return
     }
 
-    println("\nEnter the object name:")
+    println("Enter the object name:")
     val objectName = readlnOrNull() ?: "object"
 
     locales.forEach { (locale, translations) ->
-        val localeFile = File(localesDir, "$locale.js")
+        val localeFile = File(projectPath, "$locale.js")
         if (!localeFile.exists()) {
             println("Warning: $locale.js does not exist in the specified directory. Skipping.")
             return@forEach
@@ -187,7 +203,7 @@ fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
     }
 
     // Update constants.js file
-    val constantsFile = File(localesDir, "constants.js")
+    val constantsFile = File(projectPath, "constants.js")
     if (!constantsFile.exists()) {
         println("Warning: constants.js does not exist in the specified directory. Creating a new file.")
         constantsFile.createNewFile()
@@ -199,6 +215,42 @@ fun updateProjectLocales(locales: Map<String, JsonObject>, maxKeyLength: Int) {
     println("✅Updated constants.js")
 
     println("${commonTranslations.size} common strings pushed successfully!")
+}
+
+fun getProjectPath(): String? {
+    val config = loadConfig()
+    val savedPath = config.getProperty("projectPath")
+
+    if (savedPath != null) {
+        println("Using saved project path: $savedPath")
+        println("Do you want to use this path? (Y/n)")
+        val response = readlnOrNull()?.lowercase() ?: "y"
+        if (response == "y" || response.isEmpty()) {
+            return savedPath
+        }
+    }
+    return null
+}
+
+fun saveConfig(key: String, value: String) {
+    val config = loadConfig()
+    config.setProperty(key, value)
+    val configFile = getConfigFile()
+    FileOutputStream(configFile).use { config.store(it, "Localiser Configuration") }
+}
+
+fun loadConfig(): Properties {
+    val config = Properties()
+    val configFile = getConfigFile()
+    if (configFile.exists()) {
+        FileInputStream(configFile).use { config.load(it) }
+    }
+    return config
+}
+
+fun getConfigFile(): File {
+    val userHome = System.getProperty("user.home")
+    return File(userHome, ".localiser.properties")
 }
 
 fun updateLocaleFile(
