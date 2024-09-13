@@ -8,6 +8,13 @@ import java.util.*
 fun main(args: Array<String>) {
     val parser = ArgParser("localiser")
 
+    val printVersion by parser.option(
+        ArgType.Boolean,
+        fullName = "version",
+        shortName = "v",
+        description = "Print localiser version"
+    ).default(false)
+
     val listCommonKeys by parser.option(
         ArgType.Boolean,
         fullName = "listCommonKeys",
@@ -66,6 +73,11 @@ fun main(args: Array<String>) {
         file.nameWithoutExtension to Json.parseToJsonElement(jsonFileContent).jsonObject
     }
 
+    if (printVersion) {
+        println("localiser version: v1.0.0")
+        return
+    }
+
     if (listCommonKeys) {
         listCommonKeys(locales, maxKeyLength)
     }
@@ -80,6 +92,9 @@ fun main(args: Array<String>) {
 
     if (updateProject) {
         updateProjectLocales(locales, maxKeyLength)
+    }
+    if (!printVersion && !listCommonKeys && !listUniqueKeys && !printJsObjects && !updateProject) {
+        println("Run 'localiser --help to learn about available commands")
     }
 }
 
